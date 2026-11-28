@@ -79,6 +79,13 @@ sampling: {temperature: 0.6, top_p: 0.95, max_tokens: 32768, seed: 0}
 custom-eval run.yaml
 ```
 
+`-u`/`--url` and `-m`/`--model` replace the config's `url` and `model`, as if
+written in the file (so the file may leave `url` out when you pass `-u`):
+
+```bash
+custom-eval run.yaml -u https://gpu-node-08:8000/v1 -m Qwen/Qwen3-8B
+```
+
 At the end a table is printed. For each benchmark it shows:
 - Score: the benchmark's reported number (its headline metric) as % ± stderr,
   the same number `results.jsonl` holds;
@@ -236,8 +243,8 @@ not executed.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `url` | yes | vLLM server URL, with or without `/v1`. Requests carry no API key and skip TLS verification. |
-| `model` | no | Served model id. Without it the server must serve exactly one model; with it, the model must be served. Checked via `/v1/models`. |
+| `url` | yes (or `-u`) | vLLM server URL, with or without `/v1`. Requests carry no API key and skip TLS verification. `-u`/`--url` replaces it. |
+| `model` | no | Served model id. Without it the server must serve exactly one model; with it, the model must be served. Checked via `/v1/models`. `-m`/`--model` replaces it. |
 | `default_system_prompt` | yes | Text inserted verbatim as the system message of every sample of every benchmark not in `benchmark_system_prompts`. `null` sends no system message (the chat template's default then applies). |
 | `benchmark_system_prompts` | no | System prompts of specific benchmarks, as `name: prompt`, keyed by the benchmark's name exactly as written in `benchmarks` (any other key is refused). Each replaces `default_system_prompt` for that benchmark; `null` sends no system message. To give several benchmarks one prompt without pasting it twice, use a YAML anchor: `&if_prompt` after `ifeval:` names its prompt, and `ifbench: *if_prompt` reuses it (as in the examples). |
 | `answer` | yes | `[open, close]` final-answer markers, e.g. `["<answer>", "</answer>"]` or `["\\boxed{", "}"]`. |
@@ -348,8 +355,10 @@ Inside it:
   benchmark's file holds only the samples it has, in the same order.
 - `logs/`: Inspect logs, one per benchmark. Browse them with
   `inspect view --log-dir <run folder>/logs`.
-- `config.yaml`: a copy of the run config.
-- `run.jsonl`: the served model id (one line), which `--resume` checks.
+- `config.yaml`: the config the run started with: your config file with `-u`
+  and `-m` applied and `model` always set to the served model id. Comments
+  are not kept, and a YAML anchor's text is written out in full. `--resume`
+  checks against it and does not rewrite it.
 
 ## Resuming a run
 
@@ -368,13 +377,22 @@ The resume picks up from `<run folder>/logs`:
 
 Without `--resume`, a run always starts in a new folder.
 
-**What you may change.** You may change `url` (the server moved),
-`data_dir`, `max_generation_workers` and `max_score_workers` between attempts;
-`output_dir` and `exp_name` are not used by a resume. Changing `model` (or the
-model the server serves), `default_system_prompt`, `benchmark_system_prompts`,
-`answer`, `benchmarks`, `repeats`, `sampling` or `judge` is refused, because it
-would mix two different runs.
-Start a new run (without `--resume`) for those.
+**What you may change.** You may change `url` (the server moved; in the file
+or with `-u`), `data_dir`, `max_generation_workers` and `max_score_workers`
+between attempts; `output_dir` and `exp_name` are not used by a resume.
+Changing `default_system_prompt`, `benchmark_system_prompts`, `answer`,
+`benchmarks`, `repeats`, `sampling` or `judge` is refused, because it would
+mix two different runs. Start a new run (without `--resume`) for those.
+
+**The model.** The model is compared as the served model id: the one in the run
+folder's `config.yaml` against the one served now (the config's `model` or
+`-m`, else the server's only model). For a run of `Qwen/Qwen3-8B`:
+- the same config against a server that moved and still serves Qwen3-8B:
+  resumes;
+- the same config plus `model: Qwen/Qwen3-8B` (or `-m Qwen/Qwen3-8B`):
+  resumes;
+- a server that now serves Qwen3-14B: refused
+  (`changed: model (Qwen/Qwen3-8B -> Qwen/Qwen3-14B)`).
 
 **Errors within one run.**
 - A failed request (server error, dropped connection, server unreachable,

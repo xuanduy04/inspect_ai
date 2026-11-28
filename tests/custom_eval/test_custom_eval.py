@@ -14,6 +14,7 @@ from custom_eval.config import (
     exp_name,
     load_config,
     repeats,
+    save_config,
     system_prompt,
     validate_config,
 )
@@ -247,7 +248,7 @@ def test_system_prompt_per_benchmark() -> None:
 def test_example_configs() -> None:
     examples = Path(__file__).parents[2] / "examples" / "custom_eval"
     for name in ("config.yaml", "mistral_config.yaml"):
-        config = load_config(examples / name)
+        config = load_config(examples / name, {})
         default = config["default_system_prompt"]
         assert default is not None and "<answer></answer>" in default
         for benchmark in config["benchmarks"]:
@@ -374,37 +375,134 @@ def test_create_run_dir_spammed_runs_get_their_own_folders(tmp_path: Path) -> No
 
 
 def test_check_resume(tmp_path: Path) -> None:
-    import yaml
+    from custom_eval.cli import check_resume
 
-    from custom_eval.cli import RUN_FILE, check_resume
-
-    config = validate_config(_config())
+    # as `run` passes it: `model` is the served model id
+    config = validate_config(_config(model="m"))
     with pytest.raises(ConfigError):  # not a run folder
-        check_resume(config, tmp_path, "m")
-    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config))
-    (tmp_path / RUN_FILE).write_text(json.dumps({"model": "m"}) + "\n")
-    check_resume(config, tmp_path, "m")
+        check_resume(config, tmp_path)
+    save_config(config, tmp_path / "config.yaml")
+    check_resume(config, tmp_path)
     # where new runs go, the server URL and the worker counts may change
     moved = _config(
+        model="m",
         url="https://other:8000",
         output_dir="/elsewhere",
         exp_name="x",
         max_generation_workers=1,
         max_score_workers=1,
     )
-    check_resume(validate_config(moved), tmp_path, "m")
+    check_resume(validate_config(moved), tmp_path)
+    for changed in (
+        {"default_system_prompt": "other"},
+        {"benchmark_system_prompts": {"aime24": "other"}},
+        {"repeats": 2},
+    ):
+        with pytest.raises(ConfigError):
+            check_resume(validate_config(_config(model="m", **changed)), tmp_path)
+    # the server now serves another model
+    with pytest.raises(ConfigError, match=r"changed: model \(m -> other\)"):
+        check_resume(validate_config(_config(model="other")), tmp_path)
+
+
+def test_load_config_overrides(tmp_path: Path) -> None:
+    import yaml
+
+    path = tmp_path / "run.yaml"
+    path.write_text(yaml.safe_dump(_config()))
+    config = load_config(path, {"url": "https://other:8000", "model": "m"})
+    assert config["url"] == "https://other:8000"
+    assert config["model"] == "m"
+    assert load_config(path, {}) == _config()
+    # with --url, the file may leave `url` out
+    without_url = _config()
+    del without_url["url"]
+    path.write_text(yaml.safe_dump(without_url))
+    assert load_config(path, {"url": "https://h:8000"})["url"] == "https://h:8000"
     with pytest.raises(ConfigError):
-        check_resume(
-            validate_config(_config(default_system_prompt="other")), tmp_path, "m"
+        load_config(path, {})
+
+
+def test_cli_url_and_model_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    import yaml
+
+    from custom_eval import cli
+
+    path = tmp_path / "run.yaml"
+    path.write_text(yaml.safe_dump(_config()))
+    seen: list[dict[str, object]] = []
+
+    def fake_run(config: dict[str, object], resume_dir: object, console: object) -> int:
+        seen.append(config)
+        return 0
+
+    monkeypatch.setattr(cli, "run", fake_run)
+    for flags in (
+        ["-u", "https://u:1", "-m", "m"],
+        ["--url", "https://u:1", "--model", "m"],
+    ):
+        monkeypatch.setattr(sys, "argv", ["custom-eval", str(path), *flags])
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main()
+        assert exit_info.value.code == 0
+        assert seen[-1]["url"] == "https://u:1" and seen[-1]["model"] == "m"
+    monkeypatch.setattr(sys, "argv", ["custom-eval", str(path)])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert seen[-1]["url"] == "https://h:8000/v1" and "model" not in seen[-1]
+
+
+def test_save_config_round_trip(tmp_path: Path) -> None:
+    import yaml
+
+    prompts = [
+        "line 1\nline 2",
+        "blank line\n\nafter it\n",
+        "  leading spaces\ntrailing spaces  \nend",
+        "tab\there\r\nwindows line\n\n\n",
+        "{name} {answer} /etc/passwd # not a comment: - [x]",
+        "ünïcödé ± 中文\n",
+        "",
+        "yes",
+        "1.5",
+        None,
+    ]
+    names = [f"b{i}" for i in range(len(prompts))]
+    config = validate_config(
+        _config(
+            model="Qwen/Qwen3-8B",
+            default_system_prompt="You are helpful.\nAnswer in <answer></answer>.",
+            benchmark_system_prompts=dict(zip(names, prompts, strict=True)),
+            benchmarks=names,
+            answer=["\\boxed{", "}"],
+            exp_name=None,
+            repeats=3,
+            sampling={
+                "temperature": 0.6,
+                "top_k": 0,
+                "seed": 0,
+                "stop": ["</s>", "\n\n"],
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+            judge={
+                "url": "u",
+                "prompt": "Q: {question}\nR: {response}\n",
+                "answer": ["<v>", "</v>"],
+                "scores": {"correct": 1, "incorrect": 0.5},
+            },
         )
-    with pytest.raises(ConfigError):
-        check_resume(
-            validate_config(_config(benchmark_system_prompts={"aime24": "other"})),
-            tmp_path,
-            "m",
-        )
-    with pytest.raises(ConfigError):  # the server now serves another model
-        check_resume(config, tmp_path, "other")
+    )
+    path = tmp_path / "config.yaml"
+    save_config(config, path)
+    assert load_config(path, {}) == config
+    text = path.read_text(encoding="utf-8")
+    # keys in `RunConfig` order, multi-line strings as block literals
+    assert list(yaml.safe_load(text))[:3] == ["url", "model", "default_system_prompt"]
+    assert "default_system_prompt: |-\n  You are helpful.\n" in text
 
 
 def test_output_order_is_repeat_major_in_dataset_order() -> None:

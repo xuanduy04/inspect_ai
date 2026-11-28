@@ -172,7 +172,8 @@ def resolve_model_id(url: str, model: str | None) -> str:
         return model
     if len(ids) != 1:
         raise ModelLookupError(
-            f"{url} serves {len(ids)} models {ids}; set 'model' in the config to pick one."
+            f"{url} serves {len(ids)} models {ids}; set 'model' in the config "
+            "(or pass --model) to pick one."
         )
     return ids[0]
 

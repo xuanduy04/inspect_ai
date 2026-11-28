@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,10 @@ class RunConfig(TypedDict):
 
     Attributes:
         url: Base URL of the vLLM server (with or without the trailing `/v1`).
+            `--url` replaces it.
         model: Served model id to evaluate. If absent, the server must serve
-            exactly one model.
+            exactly one model. `--model` replaces it. The `config.yaml` saved
+            in a run folder always holds the served model id.
         default_system_prompt: System prompt inserted verbatim as the first
             message of every sample of every benchmark not in
             `benchmark_system_prompts`. `null` sends no system message.
@@ -217,18 +220,60 @@ def validate_config(data: Any) -> RunConfig:
     return data  # type: ignore[return-value]
 
 
-def load_config(path: str | Path) -> RunConfig:
-    """Load and validate a run config file (YAML).
+def load_config(path: str | Path, overrides: dict[str, str]) -> RunConfig:
+    """Load a run config file (YAML), set `overrides` on top, then validate.
 
     Args:
         path: Path to the YAML file.
+        overrides: Keys that replace the file's (the command line's `--url` and
+            `--model`), as if written in the file; empty for none.
 
     Returns:
         The validated config.
     """
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
+    if isinstance(data, dict):
+        data = {**data, **overrides}
     return validate_config(data)
+
+
+class _ConfigDumper(yaml.SafeDumper):
+    """YAML dumper that writes multi-line strings as block literals (`|`)."""
+
+
+def _represent_str(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    # PyYAML falls back to a quoted style for a string a block literal can't
+    # hold exactly (e.g. trailing spaces), so the round trip stays exact
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_ConfigDumper.add_representer(str, _represent_str)
+
+
+def save_config(config: RunConfig, path: Path) -> None:
+    """Write a run config to a YAML file that `load_config` reads back unchanged.
+
+    Keys are written in `RunConfig` order. Comments and YAML anchors of the
+    original file are not kept (an anchored value is written out in full).
+
+    Args:
+        config: The config to save.
+        path: The file to write.
+    """
+    order = list(RunConfig.__annotations__)
+    ordered = dict(sorted(config.items(), key=lambda item: order.index(item[0])))
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(
+            ordered,
+            f,
+            Dumper=_ConfigDumper,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=math.inf,
+        )
 
 
 def system_prompt(config: RunConfig, benchmark: str) -> str | None:

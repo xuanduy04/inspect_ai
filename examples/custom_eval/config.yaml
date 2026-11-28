@@ -1,9 +1,11 @@
 # One run = one model, its benchmarks and their system prompts. Run with:  custom-eval examples/custom_eval/config.yaml
 
 # vLLM server (with or without the trailing /v1). Requests carry no API key and skip TLS checks.
+# `-u`/`--url` on the command line replaces it.
 url: https://gpu-node-07:8000/v1
 
 # Optional. Without it the server must serve exactly one model (checked via /v1/models).
+# `-m`/`--model` on the command line replaces it.
 # model: Qwen/Qwen3-8B
 
 # Inserted verbatim as the system message of every sample of every benchmark not listed in

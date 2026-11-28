@@ -155,6 +155,37 @@ Definitions are in `README.md` ("How answers are scored"). Choices behind them,
     requests resumed with the remaining 236: the old logs were reused.
   - The merged example configs give exactly the prompts and other values of
     the four files they replace.
+- Command-line `-u`/`--url` and `-m`/`--model`, and the saved config
+  (2026-11-28, user request). User decisions: the flags; a run folder's
+  `config.yaml` holds the config the run used, with the overrides and the
+  served model id (comments may go); `run.jsonl` is dropped, so resume
+  checks the model through `config.yaml`. Resume behavior the user set: a
+  moved server serving the same model resumes, a server serving another
+  model is refused, and adding `model: <the same id>` resumes. Not
+  specified, chosen: an override is applied before validation, exactly as if
+  written in the file, so the file may leave `url` out when `-u` is given;
+  `config.yaml` is written in `RunConfig` key order without comments (YAML
+  anchors written out in full, multi-line strings as block literals) and is
+  not rewritten by a resume; the refusal names both models
+  (`changed: model (a -> b)`). Run folders made before this change whose
+  config had no `model` are refused (`changed: model`) until `model: <id>`
+  (the id in their `run.jsonl`) is added to their `config.yaml`. Checked
+  2026-11-28 on mock servers with the real aime24 and ifeval files:
+  - `-u` over a dead `url` in the file ran on the given server. The saved
+    `config.yaml` held that URL and `model: mock/model`, no comments, and
+    read back to the same config. The round trip was also tested on prompts
+    with CRLF, tabs, trailing spaces, blank lines and unicode.
+  - A run killed with `kill -9` after 393 of 571 requests resumed on another
+    server serving the same model with the remaining 179; `config.yaml` was
+    unchanged.
+  - Resuming the finished run with `-m mock/model`, or with
+    `model: mock/model` in the file, sent no request. A server serving only
+    `other/model`, and `-m other/model` on a server serving both, were
+    refused (`changed: model (mock/model -> other/model)`).
+  - A file without `url` was refused without `-u` and ran with it; `-m`
+    picked one model on a server serving two.
+  - A run folder of the previous code (its `config.yaml` without `model`) was
+    refused, and resumed with no request once `model: mock/model` was added.
 
 ## Math
 
