@@ -4,11 +4,11 @@ from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 @solver
 def system_prompt_generate(system_prompt: str | None, seed: int | None) -> Solver:
-    """Insert the run's system prompt verbatim, then generate once.
+    """Insert a benchmark's system prompt verbatim, then generate once.
 
     The system prompt is never formatted or read as a file (unlike Inspect's
     `system_message()`). Any system messages the sample already has are
-    replaced, so every sample carries exactly the run's system prompt.
+    replaced, so every sample carries exactly `system_prompt`.
 
     Args:
         system_prompt: System prompt text, or None to send no system message.

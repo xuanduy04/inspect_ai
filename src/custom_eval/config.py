@@ -30,14 +30,19 @@ class JudgeConfig(TypedDict):
 
 
 class RunConfig(TypedDict):
-    r"""One evaluation run: one model, one system prompt, a list of benchmarks.
+    r"""One evaluation run: one model, a list of benchmarks and their system prompts.
 
     Attributes:
         url: Base URL of the vLLM server (with or without the trailing `/v1`).
         model: Served model id to evaluate. If absent, the server must serve
             exactly one model.
-        system_prompt: System prompt inserted verbatim as the first message of
-            every sample. `null` sends no system message.
+        default_system_prompt: System prompt inserted verbatim as the first
+            message of every sample of every benchmark not in
+            `benchmark_system_prompts`. `null` sends no system message.
+        benchmark_system_prompts: System prompts of specific benchmarks, keyed
+            by their names in `benchmarks`. Each replaces
+            `default_system_prompt` for that benchmark; `null` sends no system
+            message.
         answer: `[open, close]` markers around the final answer, e.g.
             `["<answer>", "</answer>"]` or `["\boxed{", "}"]`.
         data_dir: Root directory holding the datasets in the Hub layout
@@ -63,7 +68,8 @@ class RunConfig(TypedDict):
 
     url: str
     model: NotRequired[str]
-    system_prompt: str | None
+    default_system_prompt: str | None
+    benchmark_system_prompts: NotRequired[dict[str, str | None]]
     answer: list[str]
     data_dir: str
     output_dir: str
@@ -139,7 +145,7 @@ def validate_config(data: Any) -> RunConfig:
         data,
         required={
             "url": (str,),
-            "system_prompt": (str, type(None)),
+            "default_system_prompt": (str, type(None)),
             "answer": (list,),
             "data_dir": (str,),
             "output_dir": (str,),
@@ -149,6 +155,7 @@ def validate_config(data: Any) -> RunConfig:
         },
         optional={
             "model": (str,),
+            "benchmark_system_prompts": (dict,),
             "exp_name": (str, type(None)),
             "repeats": (int,),
             "sampling": (dict,),
@@ -168,6 +175,18 @@ def validate_config(data: Any) -> RunConfig:
         raise ConfigError("config.benchmarks: expected a non-empty list of names")
     if len(set(data["benchmarks"])) != len(data["benchmarks"]):
         raise ConfigError("config.benchmarks: duplicate benchmark names")
+    if "benchmark_system_prompts" in data:
+        for name, prompt in data["benchmark_system_prompts"].items():
+            if name not in data["benchmarks"]:
+                raise ConfigError(
+                    f"config.benchmark_system_prompts: {name!r} is not in "
+                    "config.benchmarks"
+                )
+            if not isinstance(prompt, str | None):
+                raise ConfigError(
+                    f"config.benchmark_system_prompts.{name}: expected a string "
+                    f"or null, got {prompt!r}"
+                )
     if "sampling" in data:
         _check_sampling("config", data["sampling"])
     if "judge" in data:
@@ -210,6 +229,24 @@ def load_config(path: str | Path) -> RunConfig:
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return validate_config(data)
+
+
+def system_prompt(config: RunConfig, benchmark: str) -> str | None:
+    """System prompt of one benchmark of the run.
+
+    Args:
+        config: The run config.
+        benchmark: Benchmark name, as listed in `benchmarks`.
+
+    Returns:
+        The benchmark's `benchmark_system_prompts` entry if it has one, else
+        `default_system_prompt` (None sends no system message).
+    """
+    if "benchmark_system_prompts" in config:
+        prompts = config["benchmark_system_prompts"]
+        if benchmark in prompts:
+            return prompts[benchmark]
+    return config["default_system_prompt"]
 
 
 def repeats(config: RunConfig) -> int:

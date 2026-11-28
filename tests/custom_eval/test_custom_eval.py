@@ -9,7 +9,14 @@ from custom_eval.answer import extract_answer
 from custom_eval.benchmarks._code import extract_code
 from custom_eval.benchmarks.code_tasks import humaneval_program, lcb_prompt
 from custom_eval.benchmarks.if_tasks import _clean_kwargs, follow_instructions
-from custom_eval.config import ConfigError, exp_name, repeats, validate_config
+from custom_eval.config import (
+    ConfigError,
+    exp_name,
+    load_config,
+    repeats,
+    system_prompt,
+    validate_config,
+)
 from custom_eval.download import DataMissingError, DataSpec, ensure_data
 from custom_eval.judge import judge_prompt
 from custom_eval.model import api_base, generate_config
@@ -26,7 +33,7 @@ from custom_eval.results import (
 def _config(**overrides: object) -> dict[str, object]:
     config: dict[str, object] = {
         "url": "https://h:8000/v1",
-        "system_prompt": "Put the answer in <answer></answer>.",
+        "default_system_prompt": "Put the answer in <answer></answer>.",
         "answer": ["<answer>", "</answer>"],
         "data_dir": "/data",
         "output_dir": "/out",
@@ -215,13 +222,52 @@ def test_validate_config_ok_and_repeats_default() -> None:
     config = validate_config(_config())
     assert repeats(config) == 1
     assert repeats(validate_config(_config(repeats=4))) == 4
-    assert validate_config(_config(system_prompt=None))["system_prompt"] is None
+    config = validate_config(_config(default_system_prompt=None))
+    assert config["default_system_prompt"] is None
+
+
+def test_system_prompt_per_benchmark() -> None:
+    config = validate_config(
+        _config(
+            benchmarks=["aime24", "ifeval", "ifbench"],
+            benchmark_system_prompts={
+                "ifeval": "Follow the instructions.",
+                "ifbench": None,
+            },
+        )
+    )
+    assert system_prompt(config, "aime24") == "Put the answer in <answer></answer>."
+    assert system_prompt(config, "ifeval") == "Follow the instructions."
+    assert system_prompt(config, "ifbench") is None
+    # without the key, every benchmark gets the default
+    config = validate_config(_config(benchmarks=["aime24", "ifeval"]))
+    assert system_prompt(config, "ifeval") == "Put the answer in <answer></answer>."
+
+
+def test_example_configs() -> None:
+    examples = Path(__file__).parents[2] / "examples" / "custom_eval"
+    for name in ("config.yaml", "mistral_config.yaml"):
+        config = load_config(examples / name)
+        default = config["default_system_prompt"]
+        assert default is not None and "<answer></answer>" in default
+        for benchmark in config["benchmarks"]:
+            prompt = system_prompt(config, benchmark)
+            if benchmark in ("ifeval", "ifbench"):
+                # the anchored IF prompt: the same text for both, without the tags
+                assert prompt == system_prompt(config, "ifeval")
+                assert prompt is not None and "<answer>" not in prompt
+            else:
+                assert prompt == default
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
         {"unknown": 1},
+        {"system_prompt": "the key's old name"},
+        {"benchmark_system_prompts": ["aime24"]},
+        {"benchmark_system_prompts": {"ifeval": "not in benchmarks"}},
+        {"benchmark_system_prompts": {"aime24": 1}},
         {"answer": ["<answer>"]},
         {"answer": ["", "</answer>"]},
         {"max_generation_workers": 0},
@@ -242,7 +288,7 @@ def test_validate_config_rejects(overrides: dict[str, object]) -> None:
 
 
 @pytest.mark.parametrize(
-    "key", ["system_prompt", "max_generation_workers", "max_score_workers"]
+    "key", ["default_system_prompt", "max_generation_workers", "max_score_workers"]
 )
 def test_validate_config_missing_key(key: str) -> None:
     config = _config()
@@ -348,7 +394,15 @@ def test_check_resume(tmp_path: Path) -> None:
     )
     check_resume(validate_config(moved), tmp_path, "m")
     with pytest.raises(ConfigError):
-        check_resume(validate_config(_config(system_prompt="other")), tmp_path, "m")
+        check_resume(
+            validate_config(_config(default_system_prompt="other")), tmp_path, "m"
+        )
+    with pytest.raises(ConfigError):
+        check_resume(
+            validate_config(_config(benchmark_system_prompts={"aime24": "other"})),
+            tmp_path,
+            "m",
+        )
     with pytest.raises(ConfigError):  # the server now serves another model
         check_resume(config, tmp_path, "other")
 

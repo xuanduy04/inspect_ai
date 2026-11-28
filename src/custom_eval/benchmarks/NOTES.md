@@ -127,6 +127,34 @@ Definitions are in `README.md` ("How answers are scored"). Choices behind them,
     no terminal. Reproduced in a pseudo-terminal with the default display
     (aime24 and ifeval: `error` before, `success` after, with the same
     verdicts as without a terminal).
+- Per-benchmark system prompts (2026-11-28, user request: run the general
+  and the IF configs as one run, the IF benchmarks under their own prompt;
+  the user chose this over running several configs at once). User
+  decisions: `system_prompt` is renamed `default_system_prompt`;
+  `benchmark_system_prompts` maps a benchmark's name, exactly as written in
+  `benchmarks`, to its prompt, and any other key is refused; the four
+  example configs are merged into `config.yaml` and `mistral_config.yaml`.
+  Not specified, chosen: a `benchmark_system_prompts` value may be `null`
+  (no system message), as `default_system_prompt` may; both keys must be
+  unchanged to resume; the merged configs list the general benchmarks, then
+  ifeval and ifbench. Each task now carries its own solver (`task_with` in
+  `cli.py`) instead of one solver passed to `eval_set`. Checked 2026-11-28
+  on a mock server with the real aime24, humaneval, ifeval and ifbench
+  files, 2 repeats, seed 5:
+  - Every generation in `output_raw/` carried its benchmark's prompt
+    verbatim: aime24 the default (holding `{name}`, a path and a newline),
+    humaneval none (`null`), ifeval and ifbench the IF prompt given once
+    with a YAML anchor. Seeds 5 and 6.
+  - Resuming the finished run sent no request. A changed
+    `default_system_prompt` or `benchmark_system_prompts` was refused
+    (exit 2), and so was a key not in `benchmarks` (before any request, no
+    run folder).
+  - A run folder made by the previous code is refused by the new code,
+    because its `config.yaml` has `system_prompt`. With that key renamed in
+    that `config.yaml`, a run killed with `kill -9` after 807 of 1,035
+    requests resumed with the remaining 236: the old logs were reused.
+  - The merged example configs give exactly the prompts and other values of
+    the four files they replace.
 
 ## Math
 

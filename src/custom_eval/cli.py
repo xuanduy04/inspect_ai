@@ -8,7 +8,14 @@ from rich.console import Console
 
 from custom_eval._score_pool import configure_score_workers
 from custom_eval.benchmarks import BENCHMARKS, BuildContext
-from custom_eval.config import ConfigError, RunConfig, exp_name, load_config, repeats
+from custom_eval.config import (
+    ConfigError,
+    RunConfig,
+    exp_name,
+    load_config,
+    repeats,
+    system_prompt,
+)
 from custom_eval.download import DataMissingError, ensure_data
 from custom_eval.judge import judge_model
 from custom_eval.model import (
@@ -24,7 +31,7 @@ from custom_eval.results import (
     write_benchmark,
 )
 from custom_eval.solver import system_prompt_generate
-from inspect_ai import eval_set
+from inspect_ai import eval_set, task_with
 from inspect_ai.log import read_eval_log
 
 TABLE_WIDTH = 160
@@ -38,7 +45,8 @@ RETRY_ATTEMPTS = 3
 
 RESUME_KEYS = (
     "model",
-    "system_prompt",
+    "default_system_prompt",
+    "benchmark_system_prompts",
     "answer",
     "benchmarks",
     "repeats",
@@ -154,9 +162,16 @@ def run(
         judge=judge,
     )
     configure_score_workers(config["max_score_workers"])
-    tasks = [b.build(ctx) for b in benchmarks]
     n_repeats = repeats(config)
     seed = sampling["seed"] if "seed" in sampling else None
+    # each benchmark gets its own system prompt (see `system_prompt`)
+    tasks = [
+        task_with(
+            b.build(ctx),
+            solver=system_prompt_generate(system_prompt(config, b.name), seed),
+        )
+        for b in benchmarks
+    ]
 
     # eval_set reuses the logs in log_dir: finished benchmarks are kept as they
     # are, failed or interrupted ones resume (completed samples are reused,
@@ -170,7 +185,6 @@ def run(
         tasks,
         log_dir=str(log_dir),
         model=model,
-        solver=system_prompt_generate(config["system_prompt"], seed),
         epochs=n_repeats,
         max_tasks=len(tasks),
         max_samples=max(len(task.dataset) for task in tasks) * n_repeats,

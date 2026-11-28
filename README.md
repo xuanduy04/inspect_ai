@@ -2,10 +2,11 @@
 
 Custom Eval evaluates a model that **vLLM already serves**, given only the
 server's URL. It runs math, code and instruction-following benchmarks under
-**your** system prompt and **your** answer format, and prints a results table
+**your** system prompts and **your** answer format, and prints a results table
 (mean ± standard error, pass@k, format and truncation rates).
 
-- One run = one config file: one model, one system prompt, a list of benchmarks.
+- One run = one config file: one model, a list of benchmarks and their system
+  prompts (a default one, plus any benchmark's own).
 - Everything runs offline: datasets are plain local files, and every checker
   ships inside this repository.
 - It is built on [Inspect AI](https://inspect.aisi.org.uk/) 0.3.291. This
@@ -41,24 +42,26 @@ which files each benchmark reads. If `PATH_TO_CUSTOM_HFD` points to your
 **3. Serve the model** with vLLM, as usual. For reasoning models, start vLLM
 with its reasoning parser so the reasoning is kept out of the judged answer.
 
-**4. Write a config.** Start from one of the four examples in
-`examples/custom_eval/`. They differ only in their benchmarks and system
-prompt:
-- `config_general.yaml`: `math500`, `aime24`, `aime25`, `humaneval`, `mbpp`,
-  `lcb_v5` and `lcb_v6`; the system prompt asks for the final answer in
-  `<answer></answer>` tags.
-- `config_if.yaml`: IFEval and IFBench; the same system prompt without that
-  instruction.
-- `mistral_config_general.yaml`, `mistral_config_if.yaml`: the same two for
-  Mistral models. Their system prompt opens with reasoning instructions in
-  Mistral's `[THINK]...[/THINK]` format instead of the helpful-assistant text.
+**4. Write a config.** Start from one of the two examples in
+`examples/custom_eval/`. Both run `math500`, `aime24`, `aime25`, `humaneval`,
+`mbpp`, `lcb_v5`, `lcb_v6`, `ifeval` and `ifbench`, and differ only in their
+system prompts:
+- `config.yaml`: the default system prompt asks for the final answer in
+  `<answer></answer>` tags; IFEval and IFBench get the same prompt without
+  that instruction (`benchmark_system_prompts`).
+- `mistral_config.yaml`: the same for Mistral models. Its system prompts open
+  with reasoning instructions in Mistral's `[THINK]...[/THINK]` format instead
+  of the helpful-assistant text.
 
 In short, a config looks like this:
 
 ```yaml
 url: https://gpu-node-07:8000/v1
-system_prompt: |
+default_system_prompt: |
   Think step by step. Put your final answer between <answer> and </answer>.
+benchmark_system_prompts:  # optional: these benchmarks get their own prompt
+  ifeval: |
+    Think step by step.
 answer: ["<answer>", "</answer>"]
 data_dir: /data/hf
 output_dir: /results
@@ -93,10 +96,10 @@ for `Qwen/Qwen3-8B` (see [Outputs](#outputs)). The exit code is 0 only if
 every benchmark succeeded. If a run is interrupted, run the same command with
 `--resume <run folder>` (see [Resuming a run](#resuming-a-run)).
 
-To evaluate the same model under another system prompt, copy the config,
-change `system_prompt` (and `exp_name`, to tell the runs apart), and run
-again. Every run gets its own folder, so the same config can also be launched
-many times, even at once.
+To evaluate the same model under other system prompts, copy the config,
+change `default_system_prompt` or `benchmark_system_prompts` (and `exp_name`,
+to tell the runs apart), and run again. Every run gets its own folder, so the
+same config can also be launched many times, even at once.
 
 ## Benchmarks
 
@@ -187,10 +190,13 @@ not executed.
 - **Only a URL.** The suite never launches or loads a model. It talks to your
   vLLM server's OpenAI-compatible API, checks the model name via `/v1/models`,
   and sends no API key and skips TLS verification.
-- **Your system prompt, verbatim, everywhere.** The system prompt is the thing
-  you vary between runs, so every sample of every benchmark gets exactly that
-  text. It is never templated and never read as a file. Inspect's own
-  `system_message()` does both, which is why it isn't used.
+- **Your system prompts, verbatim.** The system prompt is the thing you vary
+  between runs, so every sample gets exactly the text you wrote: its
+  benchmark's entry in `benchmark_system_prompts`, or else
+  `default_system_prompt`. So one run can give benchmarks different prompts,
+  e.g. IFEval and IFBench without the answer-tag instruction (as in the
+  examples). A prompt is never templated and never read as a file. Inspect's
+  own `system_message()` does both, which is why it isn't used.
 - **No format instruction of our own.** The format instruction lives in your
   system prompt, so you decide its wording. That is why `strict` exists: it
   shows whether the model followed your format. `lenient` shows the
@@ -232,7 +238,8 @@ not executed.
 |---|---|---|
 | `url` | yes | vLLM server URL, with or without `/v1`. Requests carry no API key and skip TLS verification. |
 | `model` | no | Served model id. Without it the server must serve exactly one model; with it, the model must be served. Checked via `/v1/models`. |
-| `system_prompt` | yes | Text inserted verbatim as the system message of every sample. `null` sends no system message (the chat template's default then applies). |
+| `default_system_prompt` | yes | Text inserted verbatim as the system message of every sample of every benchmark not in `benchmark_system_prompts`. `null` sends no system message (the chat template's default then applies). |
+| `benchmark_system_prompts` | no | System prompts of specific benchmarks, as `name: prompt`, keyed by the benchmark's name exactly as written in `benchmarks` (any other key is refused). Each replaces `default_system_prompt` for that benchmark; `null` sends no system message. To give several benchmarks one prompt without pasting it twice, use a YAML anchor: `&if_prompt` after `ifeval:` names its prompt, and `ifbench: *if_prompt` reuses it (as in the examples). |
 | `answer` | yes | `[open, close]` final-answer markers, e.g. `["<answer>", "</answer>"]` or `["\\boxed{", "}"]`. |
 | `data_dir` | yes | Dataset root (see [Dataset files](#dataset-files)). |
 | `output_dir` | yes | Parent folder of the run folders: every run writes to a new folder in it (see [Outputs](#outputs)). `--resume` continues a run in its folder. |
@@ -364,8 +371,9 @@ Without `--resume`, a run always starts in a new folder.
 **What you may change.** You may change `url` (the server moved),
 `data_dir`, `max_generation_workers` and `max_score_workers` between attempts;
 `output_dir` and `exp_name` are not used by a resume. Changing `model` (or the
-model the server serves), `system_prompt`, `answer`, `benchmarks`, `repeats`,
-`sampling` or `judge` is refused, because it would mix two different runs.
+model the server serves), `default_system_prompt`, `benchmark_system_prompts`,
+`answer`, `benchmarks`, `repeats`, `sampling` or `judge` is refused, because it
+would mix two different runs.
 Start a new run (without `--resume`) for those.
 
 **Errors within one run.**
