@@ -54,9 +54,6 @@ No unrequested mechanisms or features either, even ones you measured as better (
 - Never use `.get(key, default)` on configs (dict or anything else). Access required keys directly; mark optional ones `typing.NotRequired` in the TypedDict.
 - Non-`None` config defaults in Python are only allowed if the user adds them.
 - Never add copyright/license headers. Never add module-level docstrings.
-- Never `git commit -s`. Never add the Claude session link in the commit message. You are the co-author, though, so do remember to credit yourself.
-- "Commit it" means commit AND push. Whenever the user asks to commit, push the commit right after.
-- Always land work on `main`: after pushing your branch, merge it into `main` and push `origin main`. That is the point of every change.
 
 ## Style
 
@@ -89,3 +86,10 @@ Treat the user's statements about their code and environment as the working prem
 ## Debugging claims
 
 Separate observations, hypotheses, and established causes (confirmed by measurement or a code path proven exercised). Don't call something the root cause, or a patch the fix, until it's established; say what would confirm it. "Can't tell without X" is a fine answer.
+
+## Commits
+
+- Subject: Conventional Commits, `type(scope): description`, imperative, under 72 chars (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `chore`). Scope is the area touched (`logs`, `math`, `cli`), never `custom_eval`; omit it if nothing fits.
+- Never `git commit -s`. Never add the Claude session link. You are the co-author, so credit yourself with a `Co-Authored-By` line.
+- "Commit it" means commit AND push. Whenever the user asks to commit, push the commit right after.
+- Always land work on `main`: after pushing your branch, merge it into `main` and push `origin main`. That is the point of every change.
