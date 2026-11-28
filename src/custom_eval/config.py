@@ -58,7 +58,8 @@ class RunConfig(TypedDict):
         exp_name: Prefix of the run folder's name; empty or null for none
             (default "").
         max_generation_workers: Maximum concurrent generation requests to the
-            vLLM server, across all benchmarks.
+            vLLM server, across all benchmarks. A run uses at most its number
+            of samples (problems x repeats, summed over the benchmarks).
         max_score_workers: Maximum concurrent scoring jobs (math checks,
             instruction checks, code tests), across all benchmarks. Scoring
             never holds a generation worker.

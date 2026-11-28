@@ -194,6 +194,17 @@ Definitions are in `README.md` ("How answers are scored"). Choices behind them,
   read. Checked 2026-11-28: the argument and `-u` each reached the URL given;
   both together exited 2 with `give the URL either as an argument or with
   -u/--url, not both` and ran nothing.
+- `max_generation_workers` capped (2026-11-28, user request): a run uses
+  min(`max_generation_workers`, problems x repeats) as the model's
+  `max_connections`, and so for the HTTP pool size (`pool_limits`); the
+  judge check gets the same value. Not specified, chosen: the problems are
+  summed over the run's benchmarks (every sample may be in flight at once,
+  and no more can be); a resume counts every sample, not only the remaining
+  ones; the saved `config.yaml` keeps the configured value. The datasets are
+  now loaded before the model is connected (the URL and model are still
+  checked first). Checked 2026-11-28 on a mock server (aime24 and ifeval,
+  571 problems) through the logs' `max_connections`: 100000 with 1 repeat
+  gave 571, with 2 repeats 1142, and 300 gave 300.
 
 ## Math
 

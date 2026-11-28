@@ -126,7 +126,6 @@ def run(config: RunConfig, resume_dir: Path | None, console: Console) -> int:
     config = config.copy()
     config["model"] = model_id
     sampling = config["sampling"] if "sampling" in config else {}
-    model = connect_model(url, model_id, sampling, config["max_generation_workers"])
     if resume_dir is not None:
         check_resume(config, resume_dir)
     console.print(
@@ -135,19 +134,6 @@ def run(config: RunConfig, resume_dir: Path | None, console: Console) -> int:
     )
 
     judge = config["judge"] if "judge" in config else None
-    if judge is not None:
-        # connect now so a bad judge URL fails before generation starts
-        judge_model(judge, config["max_generation_workers"])
-
-    if resume_dir is None:
-        run_dir = create_run_dir(config["output_dir"], exp_name(config), model_id)
-        save_config(config, run_dir / "config.yaml")
-    else:
-        run_dir = resume_dir
-    # unwrapped, so the path can be copied for --resume
-    console.print(f"Run folder: {run_dir}", soft_wrap=True, markup=False)
-    results_path, metadata_path, raw_dir, log_dir = output_paths(run_dir)
-
     answer_open, answer_close = config["answer"]
     ctx = BuildContext(
         data_dir=data_dir,
@@ -167,12 +153,32 @@ def run(config: RunConfig, resume_dir: Path | None, console: Console) -> int:
         for b in benchmarks
     ]
 
+    # at most every sample of every benchmark is in flight at once (max_samples
+    # below), so the cap is at most the run's number of samples
+    generation_workers = min(
+        config["max_generation_workers"],
+        sum(len(task.dataset) for task in tasks) * n_repeats,
+    )
+    model = connect_model(url, model_id, sampling, generation_workers)
+    if judge is not None:
+        # connect now so a bad judge URL fails before generation starts
+        judge_model(judge, generation_workers)
+
+    if resume_dir is None:
+        run_dir = create_run_dir(config["output_dir"], exp_name(config), model_id)
+        save_config(config, run_dir / "config.yaml")
+    else:
+        run_dir = resume_dir
+    # unwrapped, so the path can be copied for --resume
+    console.print(f"Run folder: {run_dir}", soft_wrap=True, markup=False)
+    results_path, metadata_path, raw_dir, log_dir = output_paths(run_dir)
+
     # eval_set reuses the logs in log_dir: finished benchmarks are kept as they
     # are, failed or interrupted ones resume (completed samples are reused,
     # only the rest are generated and scored).
     # Generation and scoring are separate pools: every sample may be active at
     # once (max_samples), so a sample being scored never holds back another's
-    # generation. Requests are capped by max_generation_workers (the model's
+    # generation. Requests are capped by generation_workers (the model's
     # max_connections); CPU scoring by max_score_workers (score slots, and
     # max_subprocesses so Inspect's own subprocess cap is not lower).
     _, headers = eval_set(

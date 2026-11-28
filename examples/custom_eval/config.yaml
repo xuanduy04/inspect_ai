@@ -40,9 +40,10 @@ output_dir: ../inspect_ai_outputs/test
 # Optional prefix of the run folder's name (default "": no prefix).
 exp_name: ""
 
-# Concurrent generation requests to the server, all benchmarks together. The HTTP connection
-# pool is raised to match. Each request in flight holds an open socket, so keep `ulimit -n`
-# well above the number in flight (at most problems x repeats, summed over the benchmarks).
+# Concurrent generation requests to the server, all benchmarks together; a run uses at most
+# its problems x repeats, summed over the benchmarks. The HTTP connection pool is raised to
+# match. Each request in flight holds an open socket, so keep `ulimit -n` well above the
+# number in flight.
 max_generation_workers: 100000
 
 # Concurrent scoring jobs (math checks, IFEval/IFBench checks, code tests), all benchmarks

@@ -252,7 +252,7 @@ not executed.
 | `data_dir` | yes | Dataset root (see [Dataset files](#dataset-files)). |
 | `output_dir` | yes | Parent folder of the run folders: every run writes to a new folder in it (see [Outputs](#outputs)). `--resume` continues a run in its folder. |
 | `exp_name` | no (`""`) | Prefix of the run folder's name. Empty or `null`: no prefix. |
-| `max_generation_workers` | yes | Maximum concurrent generation requests to the server, across all benchmarks. The HTTP connection pool (Inspect's default: 1,000 connections) is raised to match. Each request in flight holds a socket, so the open-file limit (`ulimit -n`) must be well above the number in flight: with 1,000 in flight, runs failed under the common default of 1,024. |
+| `max_generation_workers` | yes | Maximum concurrent generation requests to the server, across all benchmarks. A run uses at most its number of samples (problems × repeats, summed over the benchmarks), as no more can be in flight. The HTTP connection pool (Inspect's default: 1,000 connections) is raised to match. Each request in flight holds a socket, so the open-file limit (`ulimit -n`) must be well above the number in flight: with 1,000 in flight, runs failed under the common default of 1,024. |
 | `max_score_workers` | yes | Maximum concurrent scoring jobs (math checks, IFEval/IFBench checks, code tests), across all benchmarks. Math and instruction checks run in this many worker processes; code tests in this many subprocesses. |
 | `benchmarks` | yes | Benchmark names from [Benchmarks](#benchmarks). |
 | `repeats` | no (1) | Generations per problem. |
