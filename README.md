@@ -77,6 +77,8 @@ custom-eval run.yaml
 ```
 
 At the end a table is printed. For each benchmark it shows:
+- Score: the benchmark's reported number (its headline metric) as % ± stderr,
+  the same number `results.jsonl` holds;
 - the headline metric as % ± stderr: strict and lenient for math; code and
   IFEval/IFBench have a single score, shown in the Strict column;
 - pass@k (k = repeats);
@@ -310,9 +312,11 @@ Every run writes to a new **run folder** in `output_dir`:
 
 Inside it:
 
-- `results.jsonl`: one line per benchmark, holding only `benchmark` and
-  `score`: the benchmark's reported number, the one the table shows, as a
-  fraction (0.85 = 85%). `score` is `null` if the benchmark failed.
+- `results.jsonl`: one line per benchmark, holding only `benchmark`,
+  `score_mean` and `score_stderr`: the benchmark's reported number (the
+  table's Score column) and its stderr, clustered by problem, as fractions
+  (0.85 = 85%). Both are `null` if the benchmark failed; `score_stderr` is also
+  `null` when it can't be computed (e.g. a single problem).
 - `results_metadata.jsonl`: everything else, one line per benchmark.
   - Every metric has its `mean` over all (problem, repeat) pairs and its
     `stderr`, clustered by problem.

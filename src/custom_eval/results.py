@@ -225,8 +225,9 @@ def write_benchmark(
 ) -> dict[str, Any]:
     """Write a benchmark's lines to `results.jsonl`, `results_metadata.jsonl` and `output_raw/`.
 
-    The `results.jsonl` line holds only the benchmark and its `score`: the mean
-    of its headline metric (the number the table shows), or None if the
+    The `results.jsonl` line holds only the benchmark, its `score_mean` (the
+    mean of its headline metric, the number the table's Score column shows) and
+    its `score_stderr` (that metric's clustered stderr); both are None if the
     benchmark failed. Everything else goes to `results_metadata.jsonl`. The raw
     lines are in `output_order`.
 
@@ -256,12 +257,24 @@ def write_benchmark(
             "error": log.error.message if log.error else None,
             "log": log.location,
         }
-        score = None
+        score_mean = None
+        score_stderr = None
     else:
         result = benchmark_result(benchmark, model, url, repeats, samples)
         result["log"] = log.location
-        score = result["metrics"][benchmark.headline]["mean"]
-    results.write(json.dumps({"benchmark": benchmark.name, "score": score}) + "\n")
+        headline = result["metrics"][benchmark.headline]
+        score_mean = headline["mean"]
+        score_stderr = headline["stderr"]
+    results.write(
+        json.dumps(
+            {
+                "benchmark": benchmark.name,
+                "score_mean": score_mean,
+                "score_stderr": score_stderr,
+            }
+        )
+        + "\n"
+    )
     results_metadata.write(json.dumps(result) + "\n")
     results.flush()
     results_metadata.flush()
@@ -286,7 +299,7 @@ def print_table(
         (r["repeats"] for r in results if r["status"] == "success"), default=1
     )
     table = Table(title="Results (%, mean ± stderr)")
-    for column in ("Benchmark", "Metric", "Strict", "Lenient"):
+    for column in ("Benchmark", "Metric", "Score", "Strict", "Lenient"):
         table.add_column(column)
     if repeats > 1:
         table.add_column(f"pass@{repeats} (strict)")
@@ -300,6 +313,7 @@ def print_table(
                 benchmark.label,
                 f"[red]{result['status']}[/red]",
                 "-",
+                "-",
             ]
             if repeats > 1:
                 row.append("-")
@@ -312,7 +326,13 @@ def print_table(
             if benchmark.headline_lenient is not None
             else None
         )
-        row = [benchmark.name, benchmark.label, _pct(strict), _pct(lenient)]
+        row = [
+            benchmark.name,
+            benchmark.label,
+            _pct(strict),
+            _pct(strict),
+            _pct(lenient),
+        ]
         if repeats > 1:
             key = f"pass@{result['repeats']}"
             row.append(f"{100 * strict[key]:.2f}" if key in strict else "-")
