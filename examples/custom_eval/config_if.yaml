@@ -1,0 +1,54 @@
+# One run = one model, one system prompt. Run with:  custom-eval examples/custom_eval/config_if.yaml
+
+# vLLM server (with or without the trailing /v1). Requests carry no API key and skip TLS checks.
+url: https://gpu-node-07:8000/v1
+
+# Optional. Without it the server must serve exactly one model (checked via /v1/models).
+# model: Qwen/Qwen3-8B
+
+# Inserted verbatim as the system message of every sample of every benchmark.
+# `null` sends no system message (the chat template's default then applies).
+system_prompt: |-
+  You are a helpful assistant. The user will ask you a question and you the assistant will solve it. The assistant first thinks about the reasoning process internally and then provides the user with the answer.
+
+# Final-answer markers. Only the last marker pair in the output counts.
+# Other examples: ["\\boxed{", "}"]   ["Final answer:", ""]
+answer: ["<answer>", "</answer>"]
+
+# Datasets in the Hugging Face layout: <data_dir>/<org>/<name>/...
+# Missing ones are fetched with $PATH_TO_CUSTOM_HFD if that is set.
+data_dir: ../../data/inspect_ai_benchmarks
+
+# Every run writes to a new folder <output_dir>/<exp_name>-<model>-<YYYYMMDD-HH_MM_SS>
+# (no "<exp_name>-" when exp_name is empty; <model> is the served model id in lowercase,
+# with "." "/" and other symbols turned into "-"). Resume an interrupted run with
+#   custom-eval examples/custom_eval/config_if.yaml --resume <that folder>
+# Finished benchmarks are kept; failed or interrupted ones continue from their completed samples.
+output_dir: ../inspect_ai_outputs/test
+
+# Optional prefix of the run folder's name (default "": no prefix).
+exp_name: ""
+
+# Concurrent generation requests to the server, all benchmarks together. The HTTP connection
+# pool is raised to match. Each request in flight holds an open socket, so keep `ulimit -n`
+# well above the number in flight (at most problems x repeats, summed over the benchmarks).
+max_generation_workers: 100000
+
+# Concurrent scoring jobs (math checks, IFEval/IFBench checks, code tests), all benchmarks
+# together. Each is one CPU-bound process: size it to the CPU cores scoring may use.
+max_score_workers: 512
+
+benchmarks: [ifeval, ifbench]
+
+# Generations per problem (default 1). Reported: mean ± stderr, pass@k, per-repeat means.
+repeats: 1
+
+# Optional request parameters. Keys left out are not sent, so vLLM's defaults
+# (the checkpoint's generation_config.json) apply. With `seed`, repeat k uses seed + k - 1.
+sampling:
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0  # 0 disables top-k in vLLM; null (like no key) falls back to generation_config.json
+  max_tokens: 8192
+  seed: 0
+  # chat_template_kwargs: {enable_thinking: true}

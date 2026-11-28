@@ -1,0 +1,341 @@
+from google.genai.types import (
+    ComputerUse,
+    Environment,
+    FunctionCall,
+    FunctionResponseBlob,
+    FunctionResponsePart,
+    Tool,
+)
+from shortuuid import uuid
+
+from inspect_ai._util.content import ContentImage
+from inspect_ai._util.images import inline_media_data
+from inspect_ai.model._chat_message import ChatMessageTool
+from inspect_ai.tool._tool_call import ToolCall
+from inspect_ai.tool._tool_info import ToolInfo
+from inspect_ai.tool._tools._computer._computer import is_computer_tool_info
+
+from ._google_computer_use_name import (
+    gemini_computer_action_name,
+    gemini_computer_action_names,
+)
+from ._google_reasoning import GeminiComputerCall
+
+# Default display dimensions matching MAX_SCALING_TARGETS["FWXGA"] in _x11_client.py.
+# These should stay in sync with the dimensions used by the container.
+DISPLAY_WIDTH = 1366
+DISPLAY_HEIGHT = 768
+
+
+def maybe_computer_use_tool(model_name: str, tool: ToolInfo) -> Tool | None:
+    return (
+        Tool(
+            computer_use=ComputerUse(
+                environment=Environment.ENVIRONMENT_BROWSER,
+            )
+        )
+        if (
+            "gemini-2.5-computer-use-preview" in model_name
+            or "gemini-3-flash-preview" in model_name
+        )
+        and is_computer_tool_info(tool)
+        else None
+    )
+
+
+def tool_call_from_gemini_computer_action(
+    function_call: FunctionCall, call_id: str | None = None
+) -> ToolCall:
+    """The Inspect call for a Gemini computer action.
+
+    `call_id` is the id the parse gives the call's part (and its reasoning
+    anchor); without one, the id names the action (`click_at_<uuid>`).
+    """
+    name = function_call.name or ""
+    return ToolCall(
+        id=call_id or f"{name}_{uuid()}",
+        function="computer",
+        arguments=_parse_gemini_action(name, function_call.args or {}),
+    )
+
+
+async def computer_tool_result_parts(
+    message: ChatMessageTool,
+) -> list[FunctionResponsePart]:
+    parts: list[FunctionResponsePart] = []
+    if isinstance(message.content, list):
+        for item in message.content:
+            if isinstance(item, ContentImage):
+                image_bytes, mime_type = inline_media_data(item.image, "image")
+                parts.append(
+                    FunctionResponsePart(
+                        inline_data=FunctionResponseBlob(
+                            mime_type=mime_type, data=image_bytes
+                        )
+                    )
+                )
+    return parts
+
+
+def gemini_action_from_tool_call(
+    tool_call: ToolCall,
+) -> tuple[str, dict[str, object]]:
+    arguments = tool_call.arguments
+    action = str(arguments.get("action", ""))
+    name = gemini_computer_action_name(arguments)
+
+    if action == "left_click":
+        x, y = _normalize_coordinate(arguments.get("coordinate", [0, 0]))
+        return name, {"x": x, "y": y}
+
+    elif action == "mouse_move":
+        x, y = _normalize_coordinate(arguments.get("coordinate", [0, 0]))
+        return name, {"x": x, "y": y}
+
+    elif action == "key":
+        text = str(arguments.get("text", ""))
+        mapping = {
+            "Return": "enter",
+            "Escape": "escape",
+            "BackSpace": "backspace",
+            "Tab": "tab",
+            "space": "space",
+            "Delete": "delete",
+            "Home": "home",
+            "End": "end",
+            "Prior": "pageup",
+            "Next": "pagedown",
+            "Up": "up",
+            "Down": "down",
+            "Left": "left",
+            "Right": "right",
+            "ctrl": "control",
+            "shift": "shift",
+            "alt": "alt",
+        }
+        keys = "+".join(mapping.get(p.strip(), p.strip()) for p in text.split("+"))
+        return name, {"keys": keys}
+
+    elif action == "type":
+        text = str(arguments.get("text", ""))
+        x, y = _normalize_coordinate(arguments.get("coordinate", [0, 0]))
+        result: dict[str, object] = {"text": text, "x": x, "y": y}
+        if "press_enter" in arguments:
+            result["press_enter"] = bool(arguments["press_enter"])
+        # Gemini defaults clear_before_typing to True, so send False explicitly
+        result["clear_before_typing"] = bool(arguments.get("clear_before_typing"))
+        return name, result
+
+    elif action == "scroll":
+        direction = str(arguments.get("scroll_direction", "down"))
+        coordinate = arguments.get("coordinate")
+        if coordinate:
+            x, y = _normalize_coordinate(coordinate)
+            amount = int(str(arguments.get("scroll_amount", 3)))
+            magnitude = min(amount * 100, 999)
+            return name, {
+                "x": x,
+                "y": y,
+                "direction": direction,
+                "magnitude": magnitude,
+            }
+        return name, {"direction": direction}
+
+    elif action == "left_click_drag":
+        start_x, start_y = _normalize_coordinate(
+            arguments.get("start_coordinate", [0, 0])
+        )
+        end_x, end_y = _normalize_coordinate(arguments.get("coordinate", [0, 0]))
+        return name, {
+            "x": start_x,
+            "y": start_y,
+            "destination_x": end_x,
+            "destination_y": end_y,
+        }
+
+    elif action == "wait":
+        return name, {}
+
+    elif action == "open_web_browser":
+        return name, {}
+
+    elif action == "navigate":
+        text = str(arguments.get("text", ""))
+        return name, {"url": text}
+
+    else:
+        # Best-effort: actions without Gemini equivalents (screenshot,
+        # triple_click, cursor_position, etc.) map to wait_5_seconds
+        # as a no-op that still returns a screenshot.
+        return name, {}
+
+
+def gemini_replay_action_name(tool_call: ToolCall, sent: str | None = None) -> str:
+    """The Gemini action a computer call replays as.
+
+    The action it was sent as (`sent`, from its reasoning anchor,
+    `gemini_computer_actions`), or else the one its id names
+    (`click_at_<id>`), when that fits the call's arguments: this keeps an
+    action parsed as another (`search` as navigation). Otherwise the action of
+    its arguments, as for a call whose arguments approval or a filter changed
+    to another action.
+    """
+    names = gemini_computer_action_names(tool_call.arguments)
+    if sent in names:
+        return sent
+    prefix = tool_call.id.rsplit("_", 1)[0]
+    if prefix in names:
+        return prefix
+    return gemini_computer_action_name(tool_call.arguments)
+
+
+def gemini_replay_args(
+    action_name: str, tool_call: ToolCall, sent: GeminiComputerCall | None = None
+) -> dict[str, object]:
+    """The arguments a computer call replays with as `action_name`.
+
+    The arguments it was `sent` with (from its reasoning anchor,
+    `gemini_computer_calls`) when it replays as that action and they still
+    parse as its arguments: this keeps fields Inspect does not parse
+    (`intent`) and coordinates that do not round-trip through screen pixels.
+    Otherwise they are rebuilt from its arguments, as for a call approval or
+    a filter changed.
+    """
+    if (
+        sent is not None
+        and sent.args is not None
+        and sent.action == action_name
+        and _parse_gemini_action(action_name, dict(sent.args)) == tool_call.arguments
+    ):
+        return dict(sent.args)
+    # go_back, go_forward and search are parsed as other Inspect actions, so
+    # their arguments are rebuilt in their own schema when that reproduces the
+    # call's current arguments (which an edit may have changed).
+    if action_name in ("go_back", "go_forward", "search"):
+        text = str(tool_call.arguments.get("text", ""))
+        args: dict[str, object] = (
+            {"query": text} if action_name == "search" and text else {}
+        )
+        if _parse_gemini_action(action_name, args) == tool_call.arguments:
+            return args
+    return gemini_action_from_tool_call(tool_call)[1]
+
+
+def _parse_gemini_action(name: str, args: dict[str, object]) -> dict[str, object]:
+    if name == "click_at":
+        x, y = _denormalize_coordinate(args)
+        return {"action": "left_click", "coordinate": [x, y]}
+
+    elif name == "type_text_at":
+        x, y = _denormalize_coordinate(args)
+        text = str(args.get("text", ""))
+        return {
+            "action": "type",
+            "text": text,
+            "coordinate": [x, y],
+            "press_enter": bool(args.get("press_enter", True)),
+            "clear_before_typing": bool(args.get("clear_before_typing", True)),
+        }
+
+    elif name == "hover_at":
+        x, y = _denormalize_coordinate(args)
+        return {"action": "mouse_move", "coordinate": [x, y]}
+
+    elif name == "key_combination":
+        keys = str(args.get("keys", ""))
+        mapping = {
+            "enter": "Return",
+            "escape": "Escape",
+            "backspace": "BackSpace",
+            "tab": "Tab",
+            "space": "space",
+            "delete": "Delete",
+            "home": "Home",
+            "end": "End",
+            "pageup": "Prior",
+            "pagedown": "Next",
+            "up": "Up",
+            "down": "Down",
+            "left": "Left",
+            "right": "Right",
+            "control": "ctrl",
+            "shift": "shift",
+            "alt": "alt",
+        }
+        text = "+".join(
+            mapping.get(p.strip().lower(), p.strip()) for p in keys.split("+")
+        )
+        return {"action": "key", "text": text}
+
+    elif name == "scroll_document":
+        direction = str(args.get("direction", "down"))
+        return {
+            "action": "scroll",
+            "scroll_direction": direction,
+            "scroll_amount": 3,
+        }
+
+    elif name == "scroll_at":
+        x, y = _denormalize_coordinate(args)
+        direction = str(args.get("direction", "down"))
+        magnitude = int(str(args.get("magnitude", 800)))
+        scroll_amount = max(1, magnitude // 100)
+        return {
+            "action": "scroll",
+            "coordinate": [x, y],
+            "scroll_direction": direction,
+            "scroll_amount": scroll_amount,
+        }
+
+    elif name == "drag_and_drop":
+        start_x, start_y = _denormalize_coordinate(args, x_key="x", y_key="y")
+        end_x, end_y = _denormalize_coordinate(
+            args, x_key="destination_x", y_key="destination_y"
+        )
+        return {
+            "action": "left_click_drag",
+            "start_coordinate": [start_x, start_y],
+            "coordinate": [end_x, end_y],
+        }
+
+    elif name == "navigate":
+        url = str(args.get("url", ""))
+        return {"action": "navigate", "text": url}
+
+    elif name == "go_back":
+        return {"action": "key", "text": "alt+Left"}
+
+    elif name == "go_forward":
+        return {"action": "key", "text": "alt+Right"}
+
+    elif name == "open_web_browser":
+        return {"action": "open_web_browser"}
+
+    elif name == "search":
+        query = str(args.get("query", ""))
+        return {"action": "navigate", "text": query}
+
+    elif name == "wait_5_seconds":
+        return {"action": "wait", "duration": 5}
+
+    else:
+        return {"action": "screenshot"}
+
+
+def _denormalize_coordinate(
+    args: dict[str, object],
+    x_key: str = "x",
+    y_key: str = "y",
+) -> tuple[int, int]:
+    x = int(str(args.get(x_key, 0)))
+    y = int(str(args.get(y_key, 0)))
+    return round(x / 1000 * DISPLAY_WIDTH), round(y / 1000 * DISPLAY_HEIGHT)
+
+
+def _normalize_coordinate(
+    coordinate: object,
+) -> tuple[int, int]:
+    if isinstance(coordinate, (list, tuple)) and len(coordinate) >= 2:
+        x, y = int(coordinate[0]), int(coordinate[1])
+        return round(x * 1000 / DISPLAY_WIDTH), round(y * 1000 / DISPLAY_HEIGHT)
+    return 0, 0

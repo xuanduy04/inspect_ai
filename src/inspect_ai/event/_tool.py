@@ -1,0 +1,220 @@
+from datetime import datetime, timezone
+from typing import Any, Callable, Literal
+
+from pydantic import ConfigDict, Field, JsonValue, field_serializer
+
+from inspect_ai._util.dateutil import UtcDatetime, datetime_to_iso_format_safe
+from inspect_ai.tool._tool import ToolResult
+from inspect_ai.tool._tool_call import ToolCallContent, ToolCallError
+
+from ._base import BaseEvent
+
+
+class ToolEvent(BaseEvent):
+    """Call to a tool.
+
+    A host tool that `sandbox_agent_bridge(bridged_tools=...)` runs for a
+    sandboxed agent is recorded with `metadata["bridge"]`: `server` and `tool`
+    (the bridged server and the tool name within it, also the event's
+    `function`), `function` (the name the model called it by, or `None`),
+    `proposal_id` (the id of the model's proposing tool call, or `None`) and
+    `grant` (`"consumed"` when a proposal matched, `"denied"` when the call
+    was refused for lack of one, `"exempt"` when a server registered with
+    `require_proposal=False` ran it without one, or `None` when the request
+    was rejected before that check).
+    """
+
+    event: Literal["tool"] = Field(default="tool")
+    """Event type."""
+
+    type: Literal["function"] = Field(default="function")
+    """Type of tool call (currently only 'function')"""
+
+    id: str
+    """Unique identifier for tool call."""
+
+    execution_id: str | None = Field(default=None)
+    """Id of this execution of the call, which the approvals and sentinel steps that judged it record as their `execution_id`.
+
+    Unique to each execution of a native call, also when a model repeats a call
+    id. For a host tool a sandbox agent bridge runs, the handout it ran for
+    (each response's handing of the call to the scaffold has its own) and the
+    bridged tool it ran, as `<handout>/<server>/<tool>`: a call that denotes
+    several bridged tools sharing a description runs once per tool, each an
+    execution of its own. `None` for a host call no handout accounts for, for
+    a host call whose request matched the grants of more than one handout
+    (which one it ran for is unknown), and in logs written before this field.
+
+    The id is opaque: compare it for equality, and don't parse it.
+
+    Experimental: not yet a stable API; may change without notice.
+    """
+
+    function: str
+    """Function called."""
+
+    arguments: dict[str, JsonValue]
+    """Arguments to function."""
+
+    view: ToolCallContent | None = Field(default=None)
+    """Custom view of tool call input."""
+
+    result: ToolResult = Field(default_factory=str)
+    """Function return value."""
+
+    truncated: tuple[int, int] | None = Field(default=None)
+    """Bytes truncated (from,to) if truncation occurred"""
+
+    error: ToolCallError | None = Field(default=None)
+    """Error that occurred during tool call."""
+
+    events: list[Any] = Field(default_factory=list)
+    """Transcript of events for tool.
+
+    Note that events are no longer recorded separately within
+    tool events but rather all events are recorded in the main
+    transcript. This field is deprecated and here for backwards
+    compatibility with transcripts that have sub-events.
+    """
+
+    completed: UtcDatetime | None = Field(default=None)
+    """Time that tool call completed (see `timestamp` for started)"""
+
+    working_time: float | None = Field(default=None)
+    """Working time for tool call (clock time minus the sample's waiting time).
+
+    The sample is waiting while a wait is open and no model call, sandbox
+    command or tool call is running (not counting commands run with
+    `exec_remote()` or inside `sandbox_agent_bridge()`). Other work done during a wait is not
+    counted, so set `time_limit` alongside `working_limit` to bound clock time.
+    """
+
+    agent: str | None = Field(default=None)
+    """Name of agent if the tool call was an agent handoff."""
+
+    agent_span_id: str | None = Field(default=None)
+    """Span ID of the agent span, if this tool call spawned an agent."""
+
+    failed: bool | None = Field(default=None)
+    """Did the tool call fail with a hard error?."""
+
+    message_id: str | None = Field(default=None)
+    """Id of ChatMessageTool associated with this event.
+
+    The message may not stay in the conversation (react removes its `submit`
+    tool's result). For a host tool a sandbox agent bridge runs for the
+    scaffold, the result reaches the conversation only when the scaffold sends
+    it back, so this is set then, on the completed event, and only when the
+    answer is certain: the scaffold sends back the reply holding the call
+    unchanged and the bridge places it under the id it handed it with, the call
+    ran once, no other call of the reply has its id or its function and
+    arguments, and exactly one tool message answers it (by call id, before the
+    next assistant message with tool calls), is new in that request, and
+    contains the start of the result the scaffold received. Its content may
+    otherwise differ from `result`: scaffolds edit results and dialects
+    reshape them.
+
+    Otherwise it stays `None`: the scaffold never sends the result, edits the
+    reply, or sends it where the bridge can't place it (another conversation
+    may hold an equal reply); a message the bridge couldn't place took the
+    reply's id; the call executed more than once; more than one tool
+    message answers it; the answer equals a message sent before, was sent
+    before the call completed, or doesn't contain the start of the result
+    (e.g. the scaffold's client gave up on the call and answered with its
+    own timeout); Google names only the result's function and several calls
+    of the reply share it; the sample resumed from a checkpoint first; or
+    256 later host calls are tracked before its result arrives.
+    """
+
+    call_message_id: str | None = Field(default=None)
+    """Id of the assistant message that proposed this tool call.
+
+    The output of the `ModelEvent` that generated the call. In the agent bridge
+    this is the generated output even when a response filter or approval
+    changed the message handed to the scaffold; `None` for a call the model
+    did not propose or one the bridge can't verify against the generation
+    (arguments a filter changed, a reply whose text a request filter edited,
+    identical calls repeated in one reply).
+    It identifies the proposing message, not necessarily one model call: a
+    cached output reused by several model calls (even within one sample and
+    epoch) has one id, so a join that matches more than one `ModelEvent` is
+    ambiguous. `message_id` is the id of the tool message holding its result.
+    """
+
+    def _set_result(
+        self,
+        result: ToolResult,
+        truncated: tuple[int, int] | None,
+        error: ToolCallError | None,
+        working_time: float,
+        agent: str | None,
+        failed: bool | None,
+        message_id: str | None,
+        agent_span_id: str | None = None,
+    ) -> None:
+        # When the event was already operator-cancelled
+        # (``AcpTransport.cancel_current_turn`` stamps
+        # ``error=ToolCallError("cancelled")`` + ``failed=True`` on any
+        # in-flight tool) and the tool subsequently finished inside the
+        # cancellation propagation window — whether naturally or with
+        # its own error — keep the cancel-marker fields sticky. The
+        # ``error.type == "cancelled" + failed=True`` combo is a
+        # unique fingerprint produced only by ``cancel_current_turn``,
+        # so no normal ``_set_result`` caller can collide with it.
+        # Forensic fields (``result``, ``completed``, ``working_time``,
+        # identifiers) are still recorded from the late completion so
+        # the eval log retains a record of what the abandoned call
+        # actually produced; late ``error`` / ``failed`` status is
+        # discarded in favor of the cancel marker so renderers / ACP
+        # surface the row as cancelled rather than as a normal failure.
+        operator_cancelled = (
+            self.error is not None
+            and self.error.type == "cancelled"
+            and self.failed is True
+        )
+
+        self.result = result
+        self.truncated = truncated
+        self.pending = None
+        self.completed = datetime.now(timezone.utc)
+        self.working_time = working_time
+        self.agent = agent
+        self.message_id = message_id
+        if agent_span_id is not None:
+            self.agent_span_id = agent_span_id
+
+        if not operator_cancelled:
+            self.error = error
+            self.failed = failed
+
+    # mechanism for operator to cancel the tool call
+
+    def _set_cancel_fn(self, cancel_fn: Callable[[], None]) -> None:
+        """Set the tool task (for possible cancellation)"""
+        self._cancel_fn = cancel_fn
+
+    def _cancel(self) -> None:
+        """Cancel the tool task."""
+        if self._cancel_fn and not self.cancelled:
+            self._cancelled = True
+            self._cancel_fn()
+
+    @property
+    def cancelled(self) -> bool:
+        """Was the task cancelled?"""
+        return self._cancelled is True
+
+    _cancelled: bool | None = None
+    """Was this tool call cancelled?"""
+
+    _cancel_fn: Callable[[], None] | None = None
+    """Function which can be used to cancel the tool call."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    """Required so that we can include '_cancel_fn' as a member."""
+
+    @field_serializer("completed")
+    def serialize_completed(self, dt: datetime | None) -> str | None:
+        if dt is None:
+            return None
+        return datetime_to_iso_format_safe(dt)

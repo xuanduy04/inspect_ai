@@ -1,0 +1,391 @@
+from typing import Final
+
+import pytest
+
+from inspect_ai._util.text import is_finite_number, str_to_float
+from inspect_ai.scorer._common import normalize_number
+from inspect_ai.scorer._unicode import unicode_number_to_float
+
+
+def test_str_to_float_basic():
+    assert str_to_float("1²") == 1.0
+    assert str_to_float("2³") == 8.0
+    assert str_to_float("5⁴") == 625.0
+    assert str_to_float("10⁰") == 1.0
+    assert str_to_float("3") == 3.0
+
+
+def test_str_to_float_decimal_base():
+    assert str_to_float("2.5²") == 2.5**2
+    assert str_to_float("0.1³") == 0.1**3
+
+
+def test_str_to_float_negative_base():
+    assert str_to_float("-2²") == (-2) ** 2
+    assert str_to_float("-2³") == (-2) ** 3
+
+
+def test_str_to_float_multi_digit_exponent():
+    assert str_to_float("2⁴⁵") == 2**45
+    assert str_to_float("3⁰⁰⁰") == 3**0  # Exponent is 0
+
+
+def test_str_to_float_no_exponent():
+    assert str_to_float("7") == 7.0
+    assert str_to_float("0") == 0.0
+
+
+def test_str_to_float_no_base():
+    # When the base is missing, default to 1.0
+    assert str_to_float("⁵") == 1.0**5
+    assert str_to_float("⁰") == 1.0**0
+
+
+def test_str_to_float_zero_exponent():
+    assert str_to_float("5⁰") == 1.0
+    assert str_to_float("0⁰") == 1.0  # 0^0 is considered 1 in this context
+
+
+def test_str_to_float_invalid_input():
+    with pytest.raises(ValueError):
+        str_to_float("abc")
+    with pytest.raises(ValueError):
+        str_to_float("")
+    with pytest.raises(ValueError):
+        str_to_float("⁺²")  # Unsupported superscript characters
+
+
+def test_str_to_float_edge_cases():
+    # Base with unsupported characters
+    with pytest.raises(ValueError):
+        str_to_float("a²")
+    # Superscript after decimal point
+    assert str_to_float("2.5⁴") == 2.5**4
+
+
+def test_str_to_float_unicode_fractions():
+    # Test simple fraction characters
+    assert str_to_float("½") == 0.5
+    assert str_to_float("¼") == 0.25
+    assert str_to_float("¾") == 0.75
+    assert str_to_float("⅓") == 1 / 3
+    assert str_to_float("⅔") == 2 / 3
+
+    # Test more complex fractions
+    assert str_to_float("⅛") == 0.125
+    assert str_to_float("⅜") == 0.375
+    assert str_to_float("⅝") == 0.625
+    assert str_to_float("⅞") == 0.875
+
+
+def test_str_to_float_mixed_fractions():
+    # Whole number with fraction
+    assert str_to_float("2½") == 2.5
+    assert str_to_float("1¾") == 1.75
+    assert str_to_float("3⅓") == 3 + (1 / 3)
+
+    # Negative number with fraction
+    assert str_to_float("-2½") == -2.5
+    assert str_to_float("-1¼") == -1.25
+
+    # Standalone signed fraction
+    assert str_to_float("-½") == -0.5
+    assert str_to_float("+½") == 0.5
+    assert str_to_float("-⅓") == -1 / 3
+    assert str_to_float("-½²") == 0.25
+
+
+def test_str_to_float_mixed_fractions_with_exponents():
+    # Fraction with exponent
+    assert str_to_float("½²") == 0.5**2
+    assert str_to_float("¾³") == 0.75**3
+
+    # Fraction with multi-digit exponents
+    assert str_to_float("½²³") == 0.5**23  # Interpreted as 0.5^23, not (0.5^2)^3
+    assert str_to_float("¾³²") == 0.75**32  # Interpreted as 0.75^32, not (0.75^3)^2
+
+    # Whole number, fraction, and exponent
+    assert str_to_float("2½²") == 2.5**2
+    assert str_to_float("1¾³") == 1.75**3
+
+    # Negative number with fraction and exponent
+    assert str_to_float("-2½²") == (-2.5) ** 2
+    assert str_to_float("-1¼³") == (-1.25) ** 3
+
+
+def test_str_to_float_fraction_invalid_input():
+    # Multiple fraction characters
+    with pytest.raises(ValueError):
+        str_to_float("½¾")
+
+    # Invalid character before fraction
+    with pytest.raises(ValueError):
+        str_to_float("a½")
+
+
+def test_str_to_float_trailing_decimal_groups():
+    # Test the original case with many trailing decimal groups
+    assert (
+        str_to_float(
+            "31800.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.00.0"
+        )
+        == 31800.00
+    )
+
+    # Test simpler cases with trailing decimal groups
+    assert str_to_float("100.00.00") == 100.00
+    assert str_to_float("42.5.5.5") == 42.5
+    assert str_to_float("3.14159.265") == 3.14159
+
+    # Test with trailing text after valid float
+    assert str_to_float("123.45abc") == 123.45
+    assert str_to_float("99.99xyz123") == 99.99
+    assert str_to_float("0.5hello") == 0.5
+
+    # Test negative numbers with trailing content
+    assert str_to_float("-50.25.25") == -50.25
+    assert str_to_float("-100.00.00.00") == -100.00
+    assert str_to_float("-3.14extra") == -3.14
+
+    # Test integers with trailing content
+    assert str_to_float("42garbage") == 42.0
+    assert str_to_float("100abc123") == 100.0
+    assert str_to_float("-75text") == -75.0
+
+    # Test edge cases
+    assert str_to_float("0.0.0.0") == 0.0
+    assert str_to_float("1.") == 1.0  # Valid float with trailing dot
+    # Note: .5extra doesn't match the regex pattern ^([+-]?\d+(?:\.\d+)?)
+
+    # Test with signs
+    assert str_to_float("+123.45.67") == 123.45
+    assert str_to_float("-987.65.43") == -987.65
+
+
+def test_basic_ascii_and_fullwidth() -> None:
+    assert unicode_number_to_float("3") == 3.0
+    assert unicode_number_to_float("４５．６") == pytest.approx(45.6)
+    assert unicode_number_to_float("1 234,56") == pytest.approx(1234.56)
+
+
+def test_grouping_and_decimal_heuristics() -> None:
+    # Rightmost of dot/comma is decimal
+    assert unicode_number_to_float("1,234.56") == pytest.approx(1234.56)
+    assert unicode_number_to_float("1.234,56") == pytest.approx(1234.56)
+    # NBSP / thin spaces as grouping
+    assert unicode_number_to_float("12\u00a0345,67") == pytest.approx(12345.67)
+    assert unicode_number_to_float("12\u202f345,67") == pytest.approx(12345.67)
+    # Apostrophe-like grouping with comma decimal
+    assert unicode_number_to_float("3’141’592,65") == pytest.approx(3141592.65)
+
+
+def test_unicode_digits_other_scripts() -> None:
+    # Arabic-Indic with Arabic decimal (U+066B) and thousands separator (U+066C)
+    assert unicode_number_to_float("١٢٬٣٤٥٫٦٧") == pytest.approx(12345.67)
+    # Eastern Arabic-Indic alternative
+    assert unicode_number_to_float("٤٥٫٦٧") == pytest.approx(45.67)
+
+
+def test_unicode_signs_and_toggling() -> None:
+    # U+2212 MINUS SIGN and fullwidth minus, multiple minus toggle
+    assert unicode_number_to_float("−-+3") == 3.0  # two minuses overall → positive
+    assert unicode_number_to_float("－3") == -3.0
+    assert unicode_number_to_float("+＋3") == 3.0  # plus variants collapse
+
+
+def test_single_char_numerics() -> None:
+    # Roman numeral and vulgar fractions via unicodedata.numeric
+    assert unicode_number_to_float("Ⅻ") == 12.0
+    assert unicode_number_to_float("½") == 0.5
+    assert unicode_number_to_float("⅔") == pytest.approx(2 / 3)
+
+
+def test_fractions_in_base() -> None:
+    assert unicode_number_to_float("2½") == 2.5
+    assert unicode_number_to_float("−½") == -0.5
+    assert unicode_number_to_float("12⅓") == pytest.approx(12 + 1 / 3)
+
+
+def test_superscript_exponents() -> None:
+    assert unicode_number_to_float("3²") == 9.0
+    assert unicode_number_to_float("1.5⁻³") == pytest.approx(1.5**-3)
+    assert unicode_number_to_float("⅔³") == pytest.approx((2 / 3) ** 3)
+    # Sign binds to base, then exponent applies
+    assert unicode_number_to_float("-2²") == 4.0
+    assert unicode_number_to_float("-2³") == -8.0
+    assert unicode_number_to_float("-½²") == pytest.approx(0.25)
+
+
+def test_scientific_notation_then_exponent() -> None:
+    # ASCII e/E exponent is part of base; superscript exponent applies after
+    assert unicode_number_to_float("1e3²") == 1_000.0**2
+    assert unicode_number_to_float("1.2E3³") == 1_200.0**3
+
+
+def test_chinese_numerals_basic() -> None:
+    assert unicode_number_to_float("一百二十三") == 123.0
+    assert unicode_number_to_float("两千零三") == 2003.0
+    assert unicode_number_to_float("壹仟贰佰叁拾肆") == 1234.0
+    assert unicode_number_to_float("二〇二五") == 2025.0
+    assert unicode_number_to_float("十") == 10.0  # omitted '一十'
+    assert unicode_number_to_float("廿三") == 23.0
+    assert unicode_number_to_float("卌六") == 46.0
+
+
+def test_chinese_with_decimal_and_fraction() -> None:
+    assert unicode_number_to_float("一百二十三点四五") == pytest.approx(123.45)
+    assert unicode_number_to_float("十二⅓") == pytest.approx(12 + 1 / 3)
+
+
+def test_chinese_large_units() -> None:
+    # 1兆 + 2345亿 + 6789万 + 1 = 1_234_567_890_001
+    expected: Final[float] = 1_234_567_890_001.0
+    assert (
+        unicode_number_to_float("一兆二千三百四十五亿六千七百八十九万零一") == expected
+    )
+
+
+def test_chinese_compound_large_units() -> None:
+    # A smaller large unit's value is the coefficient of a following larger
+    # unit: 一万亿 = 一万 * 亿, not 万 alone.
+    assert unicode_number_to_float("一万亿") == 1_000_000_000_000.0
+    assert unicode_number_to_float("十二万亿") == 12_000_000_000_000.0
+    assert unicode_number_to_float("三万亿") == 3_000_000_000_000.0
+    assert unicode_number_to_float("一万二千亿") == 1_200_000_000_000.0
+    assert unicode_number_to_float("一万亿二千万") == 1_000_020_000_000.0
+    # Traditional forms and higher compounds use the same rule.
+    assert unicode_number_to_float("一萬億") == 1_000_000_000_000.0
+    assert unicode_number_to_float("一万兆") == 10_000_000_000_000_000.0
+    # Descending-then-ascending sequences stay additive, not multiplicative.
+    assert unicode_number_to_float("一兆一万亿") == 2_000_000_000_000.0
+
+
+def test_chinese_long_repeated_large_units() -> None:
+    # Long repeated-unit input must not recurse once per unit: the
+    # compound-unit split used to recurse on every "万", so "万" * 1100
+    # raised RecursionError instead of returning a score.
+    assert unicode_number_to_float("万" * 1100) == 0.0
+    assert unicode_number_to_float("一万" * 1100) == 11_000_000.0
+    # Malformed trailing content still fails as unparseable, not as a crash.
+    with pytest.raises(ValueError):
+        unicode_number_to_float("万" * 1100 + "x")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # Digits before a unit are a run, not a single digit.
+        ("12万", 120_000.0),
+        ("10万", 100_000.0),
+        ("007万", 70_000.0),
+        ("25億", 2_500_000_000.0),
+        ("12兆", 12_000_000_000_000.0),
+        ("１２３万", 1_230_000.0),  # fullwidth digits
+        ("٣٠万", 300_000.0),  # Arabic-Indic digits
+        # A unit ends the run, so later digits start a new one.
+        ("12万34", 120_034.0),
+        ("12万034", 120_034.0),
+        ("1亿2345万6789", 123_456_789.0),
+        ("12万3千4百5十6", 123_456.0),
+        # Signs, spaces and a fractional tail leave the run intact.
+        ("-12万", -120_000.0),
+        ("12 万", 120_000.0),
+        ("12万.5", 120_000.5),
+    ],
+)
+def test_digit_run_before_chinese_unit(value: str, expected: float) -> None:
+    assert unicode_number_to_float(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # Chinese digit characters keep their place-value reading.
+        ("十二万", 120_000.0),
+        ("1万2千", 12_000.0),
+        ("三千2", 3_002.0),
+        ("2千3百", 2_300.0),
+    ],
+)
+def test_chinese_units_with_chinese_digits(value: str, expected: float) -> None:
+    assert unicode_number_to_float(value) == expected
+
+
+@pytest.mark.parametrize("value", ["12.5万", "1,000万"])
+def test_chinese_unit_forms_still_rejected(value: str) -> None:
+    # A decimal or a grouped number before a unit is not parsed; pin it so a
+    # later change to this path cannot start accepting them silently.
+    with pytest.raises(ValueError):
+        unicode_number_to_float(value)
+
+
+def test_digit_run_at_the_float_limit_still_parses() -> None:
+    # 300 nines times 10⁴ is 1e304, well inside the float range: the run has to
+    # join, and the result has to survive the conversion.
+    assert unicode_number_to_float("9" * 300 + "万") == float(int("9" * 300) * 10_000)
+
+
+@pytest.mark.parametrize("value", ["9" * 305 + "万", "9" * 400 + "万"])
+def test_digit_run_beyond_the_float_range_is_unparseable(value: str) -> None:
+    # Joining the digits can build an integer with no float counterpart.
+    # Converting it raised OverflowError out of the scorer; unparseable input
+    # has to stay a ValueError so the comparison answers instead of crashing.
+    with pytest.raises(ValueError):
+        unicode_number_to_float(value)
+
+
+def test_error_cases() -> None:
+    with pytest.raises(ValueError):
+        unicode_number_to_float("abc")
+    with pytest.raises(ValueError):
+        unicode_number_to_float("1x2")
+    with pytest.raises(ValueError):
+        unicode_number_to_float("1½⅓")  # multiple vulgar fraction chars
+    with pytest.raises(ValueError):
+        unicode_number_to_float("")  # empty
+
+
+def test_normalize_unicode_numeric():
+    assert normalize_number("三三") == normalize_number("三三")
+
+
+def test_is_finite_number():
+    assert is_finite_number("5")
+    assert is_finite_number("-5")
+    assert is_finite_number("3.14")
+    assert is_finite_number("1e3")
+    assert is_finite_number(" 2 ")
+    assert not is_finite_number("nan")
+    assert not is_finite_number("inf")
+    assert not is_finite_number("-inf")
+    assert not is_finite_number("hello")
+    assert not is_finite_number("")
+    # unicode numerics are not handled by float() and so are not finite
+    # numbers in this sense (callers that need them must check separately)
+    assert not is_finite_number("½")
+
+
+def test_normalize_number_rejects_trailing_content():
+    # normalize_number must not silently truncate to a numeric prefix; that
+    # would make match(numeric=True, location="exact") accept e.g. "5 some
+    # text" as the number 5. str_to_float (used elsewhere) is permissive by
+    # design, but normalize_number is not.
+    assert normalize_number("5 some text") == "5 some text"
+    assert normalize_number("5abc") == "5abc"
+    assert normalize_number("3.14foo") == "3.14foo"
+    assert normalize_number("-5 garbage") == "-5 garbage"
+
+
+def test_normalize_number_unicode_inputs():
+    # Inputs the unicode parser handles end-to-end.
+    assert normalize_number("−5") == "-5"  # U+2212 minus
+    assert normalize_number("-½") == "-0.5"
+    assert normalize_number("2½") == "2.5"
+    assert normalize_number("一百二十三") == "123"
+    assert normalize_number("１２３") == "123"
+
+
+def test_normalize_number_rejects_non_finite():
+    assert normalize_number("inf") == "inf"
+    assert normalize_number("-inf") == "-inf"
+    assert normalize_number("nan") == "nan"

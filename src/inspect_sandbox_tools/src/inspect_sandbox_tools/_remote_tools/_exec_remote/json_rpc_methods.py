@@ -1,0 +1,67 @@
+import os
+
+from ..._util.json_rpc_helpers import validated_json_rpc_method
+from ._controller import Controller
+from .tool_types import (
+    CloseStdinParams,
+    CloseStdinResult,
+    KillKeyParams,
+    KillKeyResult,
+    KillParams,
+    KillResult,
+    PollParams,
+    PollResult,
+    SubmitParams,
+    SubmitResult,
+    WriteStdinParams,
+    WriteStdinResult,
+)
+
+controller = Controller()
+_can_switch_user = os.getuid() == 0
+
+
+@validated_json_rpc_method(SubmitParams)
+async def exec_remote_start(params: SubmitParams) -> SubmitResult:
+    """Submit a command for async execution. Returns the PID."""
+    pid = await controller.submit(
+        params.command,
+        input=params.input,
+        stdin_open=params.stdin_open,
+        env=params.env,
+        cwd=params.cwd,
+        user=params.user,
+        can_switch_user=_can_switch_user,
+        job_key=params.job_key,
+    )
+    return SubmitResult(pid=pid)
+
+
+@validated_json_rpc_method(PollParams)
+async def exec_remote_poll(params: PollParams) -> PollResult:
+    """Poll job state and get incremental output."""
+    return await controller.poll(params.pid, params.ack_seq, params.wait)
+
+
+@validated_json_rpc_method(KillParams)
+async def exec_remote_kill(params: KillParams) -> KillResult:
+    """Kill a running job."""
+    return await controller.kill(params.pid, params.ack_seq)
+
+
+@validated_json_rpc_method(KillKeyParams)
+async def exec_remote_kill_key(params: KillKeyParams) -> KillKeyResult:
+    """Kill the job started with a key, or refuse its start if it has not arrived."""
+    return await controller.kill_key(params.job_key)
+
+
+@validated_json_rpc_method(WriteStdinParams)
+async def exec_remote_write_stdin(params: WriteStdinParams) -> WriteStdinResult:
+    """Write data to stdin of a running job."""
+    return await controller.write_stdin(params.pid, params.data, params.ack_seq)
+
+
+@validated_json_rpc_method(CloseStdinParams)
+async def exec_remote_close_stdin(params: CloseStdinParams) -> CloseStdinResult:
+    """Close stdin of a running job to signal EOF."""
+    return await controller.close_stdin(params.pid, params.ack_seq)

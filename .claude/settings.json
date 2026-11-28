@@ -1,0 +1,20 @@
+{
+  "autoCompactEnabled": false,
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "mcp__github",
+      "mcp__Hugging_Face",
+      "mcp__claude-code-remote"
+    ]
+  }
+}
