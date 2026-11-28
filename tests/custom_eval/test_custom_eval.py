@@ -444,6 +444,7 @@ def test_cli_url_and_model_flags(
     for flags in (
         ["-u", "https://u:1", "-m", "m"],
         ["--url", "https://u:1", "--model", "m"],
+        ["https://u:1", "-m", "m"],  # the URL as the argument after the config
     ):
         monkeypatch.setattr(sys, "argv", ["custom-eval", str(path), *flags])
         with pytest.raises(SystemExit) as exit_info:
@@ -454,6 +455,13 @@ def test_cli_url_and_model_flags(
     with pytest.raises(SystemExit):
         cli.main()
     assert seen[-1]["url"] == "https://h:8000/v1" and "model" not in seen[-1]
+    # a URL argument and -u together: refused before anything runs
+    runs = len(seen)
+    argv = ["custom-eval", str(path), "https://u:1", "-u", "https://u:2"]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+    assert exit_info.value.code == 2 and len(seen) == runs
 
 
 def test_save_config_round_trip(tmp_path: Path) -> None:

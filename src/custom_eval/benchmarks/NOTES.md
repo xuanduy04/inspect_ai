@@ -186,6 +186,14 @@ Definitions are in `README.md` ("How answers are scored"). Choices behind them,
     picked one model on a server serving two.
   - A run folder of the previous code (its `config.yaml` without `model`) was
     refused, and resumed with no request once `model: mock/model` was added.
+- The URL as a positional argument (2026-11-28, user request):
+  `custom-eval <config> [URL] [options]` does the same as `-u`. User
+  decisions: positional arguments come before the options; giving both a
+  URL argument and `-u` is refused at once. Not specified, chosen: the
+  refusal is an argparse usage error (exit 2), raised before the config is
+  read. Checked 2026-11-28: the argument and `-u` each reached the URL given;
+  both together exited 2 with `give the URL either as an argument or with
+  -u/--url, not both` and ran nothing.
 
 ## Math
 

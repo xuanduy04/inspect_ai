@@ -212,12 +212,18 @@ def run(config: RunConfig, resume_dir: Path | None, console: Console) -> int:
 
 
 def main() -> None:
-    """Entry point: `custom-eval <config.yaml> [options]` (see `--help`)."""
+    """Entry point: `custom-eval <config.yaml> [URL] [options]` (see `--help`)."""
     parser = argparse.ArgumentParser(
         prog="custom-eval",
         description="Evaluate a vLLM-served model on the suite's benchmarks.",
     )
     parser.add_argument("config", type=Path, help="run config (YAML)")
+    parser.add_argument(
+        "url",
+        nargs="?",
+        metavar="URL",
+        help="vLLM server URL, used instead of the config's `url` (same as -u)",
+    )
     parser.add_argument(
         "--resume",
         type=Path,
@@ -227,6 +233,7 @@ def main() -> None:
     parser.add_argument(
         "-u",
         "--url",
+        dest="url_option",
         metavar="URL",
         help="vLLM server URL, used instead of the config's `url`",
     )
@@ -237,9 +244,13 @@ def main() -> None:
         help="served model id to evaluate, used instead of the config's `model`",
     )
     args = parser.parse_args()
+    if args.url is not None and args.url_option is not None:
+        parser.error("give the URL either as an argument or with -u/--url, not both")
     overrides: dict[str, str] = {}
     if args.url is not None:
         overrides["url"] = args.url
+    if args.url_option is not None:
+        overrides["url"] = args.url_option
     if args.model is not None:
         overrides["model"] = args.model
     console = Console()

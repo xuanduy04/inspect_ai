@@ -35,7 +35,8 @@ class RunConfig(TypedDict):
 
     Attributes:
         url: Base URL of the vLLM server (with or without the trailing `/v1`).
-            `--url` replaces it.
+            A URL on the command line (the argument after the config, or
+            `--url`) replaces it.
         model: Served model id to evaluate. If absent, the server must serve
             exactly one model. `--model` replaces it. The `config.yaml` saved
             in a run folder always holds the served model id.
@@ -225,7 +226,7 @@ def load_config(path: str | Path, overrides: dict[str, str]) -> RunConfig:
 
     Args:
         path: Path to the YAML file.
-        overrides: Keys that replace the file's (the command line's `--url` and
+        overrides: Keys that replace the file's (the command line's URL and
             `--model`), as if written in the file; empty for none.
 
     Returns:
